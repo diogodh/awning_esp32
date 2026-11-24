@@ -1,0 +1,14 @@
+# credenciais: nunca publicar
+segredos.h
+*.htpasswd*
+.env
+
+# ficheiros gerados / temporarios
+toldo_api.json
+build/
+*.bin
+*.elf
+.DS_Store
+Thumbs.db
+.vscode/
+__pycache__/
