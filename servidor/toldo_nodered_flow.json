@@ -1,0 +1,249 @@
+[
+ {
+  "id": "toldo_tab",
+  "type": "tab",
+  "label": "Toldo",
+  "disabled": false,
+  "info": "Ponte entre toldo.exemplo.com e o ESP32."
+ },
+ {
+  "id": "toldo_in_pag",
+  "type": "http in",
+  "z": "toldo_tab",
+  "name": "pagina",
+  "url": "/toldo/",
+  "method": "get",
+  "upload": false,
+  "swaggerDoc": "",
+  "x": 130,
+  "y": 80,
+  "wires": [
+   [
+    "toldo_fn_pag"
+   ]
+  ]
+ },
+ {
+  "id": "toldo_fn_pag",
+  "type": "function",
+  "z": "toldo_tab",
+  "name": "montar pagina",
+  "func": "// Monta a pagina do toldo com o ultimo estado enviado pelo ESP32.\nconst esc = s => String(s ?? '').replace(/[&<>\"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[c]));\nconst fmt = (ms, o) => new Date(ms).toLocaleString('pt-PT', Object.assign({ timeZone: 'Europe/Lisbon' },\n    o || { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }));\n\nconst st = flow.get('toldo_estado') || null;\nconst visto = flow.get('toldo_visto') || 0;\nconst pend = flow.get('toldo_pendente') || null;\nconst agora = Date.now();\nconst online = visto && (agora - visto) < 30000;\n\nlet h = `<!doctype html><html lang=\"pt\"><head><meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n<meta http-equiv=\"refresh\" content=\"10\"><title>Toldo</title><style>\nbody{font-family:system-ui,sans-serif;margin:16px;max-width:640px;color:#222;background:#fafafa}\nh1{font-size:22px;margin:0 0 12px}.card{background:#fff;border:1px solid #ddd;border-radius:10px;padding:12px;margin-bottom:12px}\ntable{width:100%;border-collapse:collapse;font-size:14px}th,td{padding:6px 4px;border-bottom:1px solid #eee;text-align:left}\nth{color:#666;font-weight:600}.alerta{color:#b00020;font-weight:600}.ok{color:#1b7f3b;font-weight:600}.muted{color:#777;font-size:13px}\n.botoes{display:flex;gap:8px}.botoes form{flex:1;margin:0}\nbutton{width:100%;padding:16px 0;font-size:18px;font-weight:600;border-radius:10px;border:1px solid #bbb;background:#fff;cursor:pointer}\nbutton:active{background:#eee}.stop{border-color:#b00020;color:#b00020}\n</style></head><body><h1>Toldo</h1>\n<div class=\"card botoes\">\n<form method=\"post\" action=\"cmd\"><input type=\"hidden\" name=\"cmd\" value=\"up\"><button>&#9650; UP</button></form>\n<form method=\"post\" action=\"cmd\"><input type=\"hidden\" name=\"cmd\" value=\"stop\"><button class=\"stop\">&#9632; STOP</button></form>\n<form method=\"post\" action=\"cmd\"><input type=\"hidden\" name=\"cmd\" value=\"down\"><button>&#9660; DOWN</button></form>\n</div><div class=\"card\">`;\n\nif (online) h += `<div class=\"ok\">ESP32 ligado (último contacto há ${Math.round((agora - visto) / 1000)} s)</div>`;\nelse if (visto) h += `<div class=\"alerta\">ESP32 sem contacto desde ${esc(fmt(visto))}</div>`;\nelse h += `<div class=\"alerta\">O ESP32 ainda não contactou o servidor.</div>`;\n\nif (pend) h += `<div class=\"muted\">Comando à espera do ESP32: ${esc(pend.cmd.toUpperCase())}</div>`;\n\nif (st) {\n    h += `<div><b>Estado:</b> ${esc(st.estado)}${st.desconhecido ? ' (ainda por confirmar)' : ''}</div>`;\n    h += `<div><b>Modo vento:</b> ${st.emVento ? 'sim (antes estava ' + esc(st.antesVento) + ')' : 'não'}</div>`;\n    if (st.falhaPrevisao) h += `<div class=\"alerta\">Previsão em falta. Nova tentativa às ${esc(st.proxima)}</div>`;\n    else h += `<div><b>Próxima verificação:</b> ${esc(st.proxima)}</div>`;\n    const c = st.cfg;\n    if (c) {\n        h += `<div class=\"muted\">Limites: vento &gt; ${esc(c.vento)} km/h ou rajadas &gt; ${esc(c.rajada)} km/h → UP. ` +\n             `Chuva ≥ ${esc(c.chuva)} mm → DOWN.` +\n             (Number(c.interv) > 0 ? ` No máximo 1 movimento automático a cada ${esc(c.interv)} min` +\n              (c.vign ? ' (exceto recolher por vento)' : '') + '.' : '') + `</div>`;\n    } else {\n        h += `<div class=\"muted\">Limites: vento / rajadas acima de ${esc(st.ventoMax)} km/h → UP. Chuva ≥ ${esc(st.chuvaMin)} mm → DOWN.</div>`;\n    }\n}\nif (flow.get('toldo_cfg_pendente')) h += `<div class=\"muted\">Alterações de configuração à espera do ESP32.</div>`;\nh += `<div style=\"margin-top:6px\"><a href=\"config\">Configurações</a></div>`;\nh += `</div><div class=\"card\"><b>Últimas 6 horas</b><table><tr><th>Hora</th><th>Vento</th><th>Rajadas</th><th>Chuva</th><th>Ação</th></tr>`;\n\nconst hist = (st && Array.isArray(st.hist)) ? st.hist : [];\nconst n = v => (v === undefined || v === null) ? '-' : esc(v);\nfor (const r of hist) {\n    h += `<tr><td>${esc(fmt(r.t * 1000))}</td><td>${n(r.v)} km/h</td><td>${n(r.r)} km/h</td><td>${n(r.c)} mm</td><td>${esc(r.a)}</td></tr>`;\n}\nif (!hist.length) h += `<tr><td colspan=\"5\" class=\"muted\">Sem registos nas últimas 6 horas.</td></tr>`;\nh += `</table><div class=\"muted\">Previsão Open-Meteo. A página atualiza a cada 10 segundos.</div></div></body></html>`;\n\nmsg.payload = h;\nmsg.headers = { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' };\nreturn msg;\n",
+  "outputs": 1,
+  "timeout": 0,
+  "noerr": 0,
+  "initialize": "",
+  "finalize": "",
+  "libs": [],
+  "x": 340,
+  "y": 80,
+  "wires": [
+   [
+    "toldo_out_pag"
+   ]
+  ]
+ },
+ {
+  "id": "toldo_out_pag",
+  "type": "http response",
+  "z": "toldo_tab",
+  "name": "",
+  "statusCode": "",
+  "headers": {},
+  "x": 540,
+  "y": 80,
+  "wires": []
+ },
+ {
+  "id": "toldo_in_cmd",
+  "type": "http in",
+  "z": "toldo_tab",
+  "name": "botoes",
+  "url": "/toldo/cmd",
+  "method": "post",
+  "upload": false,
+  "swaggerDoc": "",
+  "x": 130,
+  "y": 160,
+  "wires": [
+   [
+    "toldo_fn_cmd"
+   ]
+  ]
+ },
+ {
+  "id": "toldo_fn_cmd",
+  "type": "function",
+  "z": "toldo_tab",
+  "name": "guardar comando",
+  "func": "// Botao da pagina: guarda o comando para o ESP32 ir buscar.\nconst c = String((msg.payload && msg.payload.cmd) || '').toLowerCase();\nif (['up', 'down', 'stop'].includes(c)) {\n    flow.set('toldo_pendente', { cmd: c, quando: Date.now() });\n    node.status({ fill: 'blue', shape: 'dot', text: 'pendente: ' + c });\n}\nmsg.statusCode = 303;\nmsg.headers = { Location: '/', 'Cache-Control': 'no-store' };\nmsg.payload = '';\nreturn msg;\n",
+  "outputs": 1,
+  "timeout": 0,
+  "noerr": 0,
+  "initialize": "",
+  "finalize": "",
+  "libs": [],
+  "x": 340,
+  "y": 160,
+  "wires": [
+   [
+    "toldo_out_cmd"
+   ]
+  ]
+ },
+ {
+  "id": "toldo_out_cmd",
+  "type": "http response",
+  "z": "toldo_tab",
+  "name": "",
+  "statusCode": "",
+  "headers": {},
+  "x": 540,
+  "y": 160,
+  "wires": []
+ },
+ {
+  "id": "toldo_in_esp",
+  "type": "http in",
+  "z": "toldo_tab",
+  "name": "esp32",
+  "url": "/toldo/esp",
+  "method": "post",
+  "upload": false,
+  "swaggerDoc": "",
+  "x": 130,
+  "y": 240,
+  "wires": [
+   [
+    "toldo_fn_esp"
+   ]
+  ]
+ },
+ {
+  "id": "toldo_fn_esp",
+  "type": "function",
+  "z": "toldo_tab",
+  "name": "estado + comando",
+  "func": "// O ESP32 envia o estado e recebe o comando pendente (se houver).\nconst p = msg.payload;\nif (p && typeof p === 'object') {\n    flow.set('toldo_estado', p);\n    flow.set('toldo_visto', Date.now());\n}\nlet cmd = '';\nconst pend = flow.get('toldo_pendente');\nif (pend) {\n    if (Date.now() - pend.quando < 60000) cmd = pend.cmd;   // comandos com mais de 1 min sao descartados\n    flow.set('toldo_pendente', null);\n}\nconst resp = { cmd };\nconst pc = flow.get('toldo_cfg_pendente');\nif (pc) {\n    if (Date.now() - pc.quando < 600000) resp.cfg = pc.cfg;   // alteracoes com mais de 10 min sao descartadas\n    flow.set('toldo_cfg_pendente', null);\n}\nnode.status({ fill: 'green', shape: 'dot',\n    text: 'ESP32 ' + new Date().toLocaleTimeString('pt-PT', { timeZone: 'Europe/Lisbon' }) +\n          (cmd ? ' -> ' + cmd : '') + (resp.cfg ? ' -> config' : '') });\nmsg.payload = resp;\nmsg.headers = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' };\nreturn msg;\n",
+  "outputs": 1,
+  "timeout": 0,
+  "noerr": 0,
+  "initialize": "",
+  "finalize": "",
+  "libs": [],
+  "x": 340,
+  "y": 240,
+  "wires": [
+   [
+    "toldo_out_esp"
+   ]
+  ]
+ },
+ {
+  "id": "toldo_out_esp",
+  "type": "http response",
+  "z": "toldo_tab",
+  "name": "",
+  "statusCode": "",
+  "headers": {},
+  "x": 540,
+  "y": 240,
+  "wires": []
+ },
+ {
+  "id": "toldo_in_cfgp",
+  "type": "http in",
+  "z": "toldo_tab",
+  "name": "config (ver)",
+  "url": "/toldo/config",
+  "method": "get",
+  "upload": false,
+  "swaggerDoc": "",
+  "x": 140,
+  "y": 320,
+  "wires": [
+   [
+    "toldo_fn_cfgp"
+   ]
+  ]
+ },
+ {
+  "id": "toldo_fn_cfgp",
+  "type": "function",
+  "z": "toldo_tab",
+  "name": "pagina config",
+  "func": "// Pagina de configuracoes: mostra os valores que o ESP32 enviou e deixa muda-los.\nconst esc = s => String(s ?? '').replace(/[&<>\"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[c]));\nconst fmt = ms => new Date(ms).toLocaleTimeString('pt-PT', { timeZone: 'Europe/Lisbon', hour: '2-digit', minute: '2-digit' });\nconst st = flow.get('toldo_estado') || null;\nconst pc = flow.get('toldo_cfg_pendente') || null;\nconst c = st && st.cfg;\nconst q = (msg.req && msg.req.query) || {};\n\nconst campo = (nome, rotulo, valor, ajuda) =>\n    `<label><b>${rotulo}</b><input type=\"number\" step=\"any\" name=\"${nome}\" value=\"${esc(valor)}\"></label><div class=\"muted\">${ajuda}</div>`;\n\nlet h = `<!doctype html><html lang=\"pt\"><head><meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Toldo: configurações</title><style>\nbody{font-family:system-ui,sans-serif;margin:16px;max-width:640px;color:#222;background:#fafafa}\nh1{font-size:22px;margin:0 0 12px}.card{background:#fff;border:1px solid #ddd;border-radius:10px;padding:12px;margin-bottom:12px}\nlabel{display:block;margin-top:12px}input[type=number]{display:block;width:100%;box-sizing:border-box;padding:8px;font-size:16px;margin-top:4px;border:1px solid #bbb;border-radius:8px}\n.muted{color:#777;font-size:13px;margin-top:2px}.ok{color:#1b7f3b;font-weight:600}.alerta{color:#b00020;font-weight:600}\nbutton{padding:12px 18px;font-size:16px;font-weight:600;border-radius:10px;border:1px solid #bbb;background:#fff;cursor:pointer;margin-top:16px}\n.principal{background:#1b5fb3;color:#fff;border-color:#1b5fb3}\n</style></head><body><h1>Configurações</h1>`;\n\nif (q.ok === '1') h += `<div class=\"card ok\">Enviado. O ESP32 aplica as alterações nos próximos segundos. Recarrega a página para ver os valores em uso.</div>`;\nif (pc) h += `<div class=\"card muted\">Há alterações enviadas às ${esc(fmt(pc.quando))} à espera do ESP32.</div>`;\n\nif (!c) {\n    h += `<div class=\"card alerta\">Ainda não há configurações do ESP32. Confirma que o ESP32 tem a versão mais recente do código e que está ligado.</div>`;\n} else {\n    h += `<form method=\"post\" action=\"config\" class=\"card\">`;\n    h += campo('vento',  'Vento médio (km/h)', c.vento,  'Recolhe se o vento médio previsto for acima deste valor. Entre 5 e 100.');\n    h += campo('rajada', 'Rajadas (km/h)',     c.rajada, 'Recolhe se as rajadas previstas forem acima deste valor. Entre 5 e 150.');\n    h += campo('chuva',  'Chuva (mm numa hora)', c.chuva, 'Estende se a chuva prevista for igual ou acima deste valor. Entre 0 e 20.');\n    h += campo('interv', 'Tempo mínimo entre movimentos (min)', c.interv,\n        'A automação não mexe o toldo mais do que uma vez neste intervalo. 0 = sem limite. Entre 0 e 360.');\n    h += `<label><input type=\"checkbox\" name=\"vign\" value=\"1\"${c.vign ? ' checked' : ''}> <b>O vento pode recolher o toldo mesmo antes desse tempo</b></label>`;\n    h += campo('stop',  'STOP depois do UP (s)', c.stop,\n        'No recolher por vento: segundos até ao STOP, para ficar um bocado de fora. 0 = recolhe tudo. Entre 0 e 120.');\n    h += campo('pulso', 'Duração do toque nos botões (ms)', c.pulso, 'Entre 50 e 2000.');\n    if (c.nini !== undefined) {   // so aparece se o ESP32 ja tiver a versao com modo noite\n        h += campo('nini', 'Modo noite: início (hora)', c.nini,\n            'A partir desta hora só mexe para recolher por vento ou estender com chuva. Entre 0 e 23.');\n        h += campo('nfim', 'Modo noite: fim (hora)', c.nfim,\n            'Até esta hora. Igual ao início = modo noite desligado. Entre 0 e 23.');\n    }\n    h += campo('lat',   'Latitude',  c.lat, 'Local da previsão. Entre -90 e 90.');\n    h += campo('lon',   'Longitude', c.lon, 'Local da previsão. Entre -180 e 180.');\n    h += `<button class=\"principal\">Guardar</button></form>`;\n    h += `<form method=\"post\" action=\"config\" class=\"card\" onsubmit=\"return confirm('Repor todos os valores por defeito?')\">\n<input type=\"hidden\" name=\"reset\" value=\"1\"><div class=\"muted\">Por defeito: vento 25, rajadas 30, chuva 0,2, 60 min entre movimentos,\nvento ignora esse tempo, STOP aos 23,5 s, toque de 100 ms, noite das 20h às 7h, aeroporto de Lisboa.</div>\n<button>Repor valores por defeito</button></form>`;\n}\nh += `<p><a href=\"./\">← Voltar</a></p></body></html>`;\n\nmsg.payload = h;\nmsg.headers = { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' };\nreturn msg;\n",
+  "outputs": 1,
+  "timeout": 0,
+  "noerr": 0,
+  "initialize": "",
+  "finalize": "",
+  "libs": [],
+  "x": 340,
+  "y": 320,
+  "wires": [
+   [
+    "toldo_out_cfgp"
+   ]
+  ]
+ },
+ {
+  "id": "toldo_out_cfgp",
+  "type": "http response",
+  "z": "toldo_tab",
+  "name": "",
+  "statusCode": "",
+  "headers": {},
+  "x": 540,
+  "y": 320,
+  "wires": []
+ },
+ {
+  "id": "toldo_in_cfgs",
+  "type": "http in",
+  "z": "toldo_tab",
+  "name": "config (guardar)",
+  "url": "/toldo/config",
+  "method": "post",
+  "upload": false,
+  "swaggerDoc": "",
+  "x": 150,
+  "y": 400,
+  "wires": [
+   [
+    "toldo_fn_cfgs"
+   ]
+  ]
+ },
+ {
+  "id": "toldo_fn_cfgs",
+  "type": "function",
+  "z": "toldo_tab",
+  "name": "guardar config",
+  "func": "// Guarda as alteracoes de configuracao para o ESP32 ir buscar (ele valida os valores).\nconst p = msg.payload || {};\nlet cfg;\nif (p.reset) {\n    cfg = { reset: true };\n} else {\n    cfg = { vign: p.vign === '1' };\n    for (const k of ['vento', 'rajada', 'chuva', 'interv', 'stop', 'pulso', 'lat', 'lon', 'nini', 'nfim']) {\n        if (p[k] !== undefined) cfg[k] = String(p[k]);\n    }\n}\nflow.set('toldo_cfg_pendente', { cfg, quando: Date.now() });\nnode.status({ fill: 'blue', shape: 'dot', text: 'config pendente' });\nmsg.statusCode = 303;\nmsg.headers = { Location: '/config?ok=1', 'Cache-Control': 'no-store' };\nmsg.payload = '';\nreturn msg;\n",
+  "outputs": 1,
+  "timeout": 0,
+  "noerr": 0,
+  "initialize": "",
+  "finalize": "",
+  "libs": [],
+  "x": 340,
+  "y": 400,
+  "wires": [
+   [
+    "toldo_out_cfgs"
+   ]
+  ]
+ },
+ {
+  "id": "toldo_out_cfgs",
+  "type": "http response",
+  "z": "toldo_tab",
+  "name": "",
+  "statusCode": "",
+  "headers": {},
+  "x": 540,
+  "y": 400,
+  "wires": []
+ }
+]

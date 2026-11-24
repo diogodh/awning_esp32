@@ -1,160 +1,162 @@
-# Toldo automático (Gaviota Elite + ESP32)
+# Automatic awning (Gaviota Elite + ESP32)
 
-Controla o toldo da varanda (motor **Gaviota Elite, ref. 60090165**) a partir de um ESP32:
+Controls a balcony awning (**Gaviota Elite** motor, ref. **60090165**) from an ESP32:
 
-- **automação pela previsão do tempo**: recolhe com vento, estende com chuva;
-- **modo noite**: de noite só mexe quando é mesmo preciso, para não fazer barulho;
-- **página local** (`http://toldo.local`) e **página pública** (`https://toldo.exemplo.com`), com o estado, o histórico, botões UP / STOP / DOWN e configurações.
+- **forecast-driven automation**: retracts when it's windy, extends when it rains;
+- **night mode**: at night it only moves when it really has to, to keep the noise down;
+- **local page** (`http://toldo.local`) and **public page** (`https://toldo.exemplo.com`) showing the state and history, with UP / STOP / DOWN buttons and settings.
 
-> Este repositório **não tem passwords, utilizadores nem chaves**. As credenciais ficam em `esp32/toldo_meteo/segredos.h`, que está no `.gitignore` (ver a secção 6). O domínio `toldo.exemplo.com` é um exemplo: usa o teu.
+> This repository **contains no passwords, usernames or keys**. Credentials live in `esp32/toldo_meteo/segredos.h`, which is in `.gitignore` (see section 6). `toldo.exemplo.com` is a placeholder domain: use your own.
+>
+> The code, its comments and the web pages are in Portuguese (*toldo* = awning, *segredos* = secrets).
 
 ---
 
-## 1. Como funciona (resumo)
+## 1. How it works (overview)
 
 ```
- Open-Meteo (previsão)          Cloudflare → nginx (auth_basic) → Node-RED
+ Open-Meteo (forecast)          Cloudflare → nginx (auth_basic) → Node-RED
         ▲                                   ▲
-        │ HTTPS, 1x por hora (xx:02)        │ HTTPS, de 5 em 5 s (estado ⇄ comando/config)
+        │ HTTPS, once an hour (xx:02)       │ HTTPS, every 5 s (state ⇄ command/config)
         │                                   │
       ┌─┴───────────────────────────────────┴─┐
-      │  ESP32-C6-Zero  (toldo_meteo.ino)     │◄── http://toldo.local (página local)
+      │  ESP32-C6-Zero  (toldo_meteo.ino)     │◄── http://toldo.local (local page)
       └───┬──────────┬──────────┬─────────────┘
           │GP2       │GP3       │GP1
         PC817 A    PC817 B    PC817 C
           │          │          │
-        S1 SUBIR   S2 STOP    S3 DESCER   ← botões de um comando Gaviota real (com a pilha dele)
-                                          → o comando envia o código RF cifrado ao motor
+        S1 UP      S2 STOP    S3 DOWN     ← buttons of a real Gaviota remote (running on its own battery)
+                                          → the remote sends the encrypted RF code to the motor
 ```
 
-- O motor usa **rolling code cifrado**, por isso não dá para o imitar por RF (essa tentativa está em `historico/`). A solução é **"carregar" nos botões de um comando verdadeiro** com opto-acopladores.
-- **Toda a lógica corre no ESP32.** Se o servidor estiver em baixo, a automação e a página local continuam a funcionar.
-- **Quem contacta o servidor é o ESP32.** Por isso não é preciso abrir portas no router.
+- The motor uses an **encrypted rolling code**, so it can't be imitated over RF (that attempt is documented in `historico/`). The solution is to **"press" the buttons of a real remote** with optocouplers.
+- **All the logic runs on the ESP32.** If the server is down, the automation and the local page keep working.
+- **The ESP32 is the one that contacts the server**, so no ports need to be opened on the router.
 
 ---
 
 ## 2. Hardware
 
-| Peça | Qtd. | Notas |
+| Part | Qty | Notes |
 |---|---|---|
-| Waveshare **ESP32-C6-Zero** | 1 | com pinos soldados, numa breadboard |
-| Opto-acoplador **PC817** | 3 | um por botão |
-| Resistência **330 Ω** | 3 | cerca de 6 mA no LED do opto |
-| Comando Gaviota já emparelhado com o motor | 1 | **fica com a pilha CR2032 dele** (isolado do ESP32, sem GND comum) |
-| Breadboard e fios | — | |
+| Waveshare **ESP32-C6-Zero** | 1 | with soldered headers, on a breadboard |
+| **PC817** optocoupler | 3 | one per button |
+| **330 Ω** resistor | 3 | about 6 mA through the opto's LED |
+| Gaviota remote already paired with the motor | 1 | **keeps its own CR2032 battery** (isolated from the ESP32, no common GND) |
+| Breadboard and wires | — | |
 
-### Ligações
+### Wiring
 
-| Botão do comando | Função | GPIO | Opto |
+| Remote button | Function | GPIO | Opto |
 |---|---|---|---|
-| S1 | SUBIR (UP = recolher) | **GP2** | A |
+| S1 | UP (retract) | **GP2** | A |
 | S2 | STOP | **GP3** | B |
-| S3 | DESCER (DOWN = estender) | **GP1** | C |
+| S3 | DOWN (extend) | **GP1** | C |
 
-Por cada canal:
+For each channel:
 
 ```
-GPIO ──[330 Ω]──► ânodo do LED do PC817
-                  cátodo do LED ──► GND do ESP32
-                  coletor / emissor ──► as duas patas do botão do comando (em paralelo com ele)
+GPIO ──[330 Ω]──► PC817 LED anode
+                  LED cathode ──► ESP32 GND
+                  collector / emitter ──► the two legs of the remote's button (in parallel with it)
 ```
 
-**PC817:** a numeração é por posição, com o ponto ou entalhe em cima à esquerda. 1 = ânodo, 2 = coletor, 3 = cátodo, 4 = emissor.
-(Nos comentários do `comando_optoacoplador.ino` usa-se a numeração do datasheet. O significado é o mesmo: LED de um lado, transistor do outro.)
+**PC817:** pins are numbered by position, with the dot or notch at the top left. 1 = anode, 2 = collector, 3 = cathode, 4 = emitter.
+(The comments in `comando_optoacoplador.ino` use the datasheet numbering. It means the same thing: LED on one side, transistor on the other.)
 
-**Botões do comando** (tácteis de 4 patas, numeração por posição: 1 = cima-esq, 2 = cima-dta, 3 = baixo-esq, 4 = baixo-dta):
+**Remote buttons** (4-leg tactile switches, numbered by position: 1 = top-left, 2 = top-right, 3 = bottom-left, 4 = bottom-right):
 
-- As patas 1↔2 estão sempre ligadas, e as 3↔4 também. Carregar no botão liga 1/2 a 3/4.
-- Usa-se a **pata 1** e a **pata 4**.
-- Medido no circuito, o contacto fechado dá cerca de 1,8 kΩ, por causa do resto do comando. É normal.
-- **Se um botão não reagir, troca o coletor e o emissor desse opto.**
+- Legs 1↔2 are always connected, and so are 3↔4. Pressing the button connects 1/2 to 3/4.
+- Use **leg 1** and **leg 4**.
+- Measured in circuit, the closed contact reads about 1.8 kΩ because of the rest of the remote. That's normal.
+- **If a button doesn't respond, swap that opto's collector and emitter.**
 
-**Pinos a evitar no ESP32-C6-Zero:**
-- GP4, GP5, GP8 (LED RGB), GP9 e GP15 (arranque), GP12 e GP13 (USB);
-- GP6, que só existe como pad por baixo da placa.
+**Pins to avoid on the ESP32-C6-Zero:**
+- GP4, GP5, GP8 (RGB LED), GP9 and GP15 (boot), GP12 and GP13 (USB);
+- GP6, which is only a pad on the underside of the board.
 
-### Posições na breadboard (montagem usada)
+### Breadboard positions (the build I used)
 
-Filas 1–30. Colunas a–e e f–j, com o sulco central entre elas. "−" é a coluna de GND. O ESP32 fica em `c1–c9` / `g1–g9`, com o USB-C virado para a fila 1. O GND do ESP32 vai de `a2` para −.
+Rows 1–30. Columns a–e and f–j, with the centre channel between them. "−" is the GND rail. The ESP32 sits in `c1–c9` / `g1–g9`, with the USB-C facing row 1. The ESP32's GND goes from `a2` to −.
 
-| Canal | Opto (entalhe em cima) | Resistência | Fio do GPIO | Cátodo → − | Ao botão |
+| Channel | Opto (notch up) | Resistor | GPIO wire | Cathode → − | To the button |
 |---|---|---|---|---|---|
-| A (SUBIR) | `e27 f27 e28 f28` | `a25–a27` | GP2: `a6 → b25` | `a28` | `g27` → pata 1, `g28` → pata 4 |
-| B (STOP) | `e14 f14 e15 f15` | `a12–a14` | GP3: `a7 → b12` | `a15` | `g14` → pata 1, `g15` → pata 4 |
-| C (DESCER) | `e22 f22 e23 f23` | `a20–a22` | GP1: `a5 → b20` | `a23` | `g22` → pata 1, `g23` → pata 4 |
+| A (UP) | `e27 f27 e28 f28` | `a25–a27` | GP2: `a6 → b25` | `a28` | `g27` → leg 1, `g28` → leg 4 |
+| B (STOP) | `e14 f14 e15 f15` | `a12–a14` | GP3: `a7 → b12` | `a15` | `g14` → leg 1, `g15` → leg 4 |
+| C (DOWN) | `e22 f22 e23 f23` | `a20–a22` | GP1: `a5 → b20` | `a23` | `g22` → leg 1, `g23` → leg 4 |
 
 ---
 
-## 3. Lógica do toldo (`esp32/toldo_meteo/toldo_meteo.ino`)
+## 3. Awning logic (`esp32/toldo_meteo/toldo_meteo.ino`)
 
-Estados: **UP = recolhido** e **DOWN = estendido**. O estado por defeito é DOWN.
+States: **UP = retracted** and **DOWN = extended**. The default state is DOWN.
 
-| Situação | O que faz |
+| Situation | What it does |
 |---|---|
-| **Vento** médio > 25 km/h **ou** rajadas > 30 km/h | **UP parcial**: UP e, 23,5 s depois, STOP, para ficar um bocado de fora. **O vento tem sempre prioridade.** |
-| O vento continua | não repete o UP (repetir recolheria tudo) |
-| **Fim do vento** | volta ao estado que tinha antes do vento |
-| **Chuva** ≥ 0,2 mm/h, sem vento | DOWN (estende, para proteger a varanda) |
-| Fim da chuva | fica como está |
+| **Wind** average > 25 km/h **or** gusts > 30 km/h | **Partial UP**: UP and, 23.5 s later, STOP, so a little stays out. **Wind always takes priority.** |
+| Wind continues | doesn't repeat the UP (repeating would retract it fully) |
+| **Wind stops** | returns to the state it was in before the wind |
+| **Rain** ≥ 0.2 mm/h, no wind | DOWN (extends, to protect the balcony) |
+| Rain stops | stays as it is |
 
-**Previsão:**
-- Vem do Open-Meteo, sem chave de API. É lida **às xx:02** (às xx:00 em ponto o serviço falha muitas vezes por excesso de pedidos).
-- Usa o máximo da hora atual e da seguinte.
-- Se falhar, não mexe e tenta outra vez de 2 em 2 min. A página mostra o motivo da falha.
+**Forecast:**
+- Comes from Open-Meteo, no API key needed. It's fetched **at xx:02** (at xx:00 sharp the service often fails from too many requests).
+- Uses the maximum of the current hour and the next one.
+- If the fetch fails, the awning doesn't move and it retries every 2 min. The page shows why it failed.
 
-**Limite de movimentos:**
-- No máximo **1 movimento a cada 60 min**. Contam os automáticos e os botões.
-- Se a regra pedir antes disso, a ação fica para a verificação seguinte.
-- **Exceção:** recolher por vento ignora o limite (configurável).
+**Movement limit:**
+- At most **1 movement every 60 min**, counting both automatic moves and button presses.
+- If a rule asks for a move before then, the action waits for the next check.
+- **Exception:** retracting for wind ignores the limit (configurable).
 
-**Modo noite** (por defeito **das 20h às 7h**, configurável). De noite só há dois movimentos possíveis:
-1. estendido + vento → recolhe;
-2. recolhido + chuva sem vento → estende.
+**Night mode** (by default **20:00 to 07:00**, configurable). At night only two moves are allowed:
+1. extended + wind → retract;
+2. retracted + rain without wind → extend.
 
-Tudo o resto fica adiado para depois do fim da noite. Por exemplo, se o vento parar de madrugada, o toldo só volta a estender de manhã. Os botões das páginas funcionam sempre. Se o início for igual ao fim, o modo noite fica desligado.
+Everything else is postponed until the night ends. For example, if the wind dies down in the early hours, the awning only extends again in the morning. The page buttons always work. If start and end are the same hour, night mode is off.
 
-**Botões das páginas:**
-- Cada botão é um clique simples no comando.
-- UP pelas páginas recolhe tudo, sem STOP automático.
-- STOP conta como DOWN (parcialmente estendido).
-- Um clique durante os 23,5 s de espera cancela o STOP automático.
+**Page buttons:**
+- Each button is a single click on the remote.
+- UP from the pages retracts fully, with no automatic STOP.
+- STOP counts as DOWN (partially extended).
+- A click during the 23.5 s wait cancels the automatic STOP.
 
-**Memória** (NVS, namespace `toldo`): estado, estado antes do vento, modo vento, hora do último movimento e configurações (chaves `c_*`). Tudo sobrevive a falhas de luz. No primeiro arranque, sem nada guardado, a primeira verificação envia sempre o comando, para acertar a posição real.
+**Memory** (NVS, namespace `toldo`): state, state before the wind, wind mode, time of the last movement and settings (`c_*` keys). Everything survives power cuts. On first boot, with nothing saved, the first check always sends the command, to sync with the real position.
 
-**Monitor Série** (115200): `u` sobe, `d` desce, `v` verifica já, `e` mostra o estado.
+**Serial Monitor** (115200): `u` up, `d` down, `v` check now, `e` show state.
 
-### Configurações (sem voltar a carregar o código)
+### Settings (no need to re-upload the code)
 
-Em `http://toldo.local/config` ou `https://toldo.exemplo.com/config`:
+At `http://toldo.local/config` or `https://toldo.exemplo.com/config`:
 
-| Campo | Defeito | Limites |
+| Field | Default | Range |
 |---|---|---|
-| Vento médio (km/h) | 25 | 5–100 |
-| Rajadas (km/h) | 30 | 5–150 |
-| Chuva (mm/h) | 0,2 | 0–20 |
-| Minutos entre movimentos | 60 | 0–360 (0 = sem limite) |
-| Vento ignora o limite | sim | — |
-| Segundos até ao STOP | 23,5 | 0–120 (0 = recolhe tudo) |
-| Duração do toque (ms) | 100 | 50–2000 |
-| Modo noite: início / fim (hora) | 20 / 7 | 0–23 (iguais = desligado) |
-| Latitude / longitude | aeroporto de Lisboa | — |
+| Average wind (km/h) | 25 | 5–100 |
+| Gusts (km/h) | 30 | 5–150 |
+| Rain (mm/h) | 0.2 | 0–20 |
+| Minutes between movements | 60 | 0–360 (0 = no limit) |
+| Wind ignores the limit | yes | — |
+| Seconds until STOP | 23.5 | 0–120 (0 = retract fully) |
+| Button press duration (ms) | 100 | 50–2000 |
+| Night mode: start / end (hour) | 20 / 7 | 0–23 (equal = off) |
+| Latitude / longitude | Lisbon airport | — |
 
-O ESP32 valida os valores e ignora os que estiverem fora dos limites. Há um botão "Repor valores por defeito".
+The ESP32 validates the values and ignores anything out of range. There's a "Repor valores por defeito" (reset to defaults) button.
 
 ---
 
-## 4. Servidor (página pública)
+## 4. Server (public page)
 
-Servidor Linux com **nginx** e **Node-RED**, atrás da **Cloudflare**:
+A Linux server running **nginx** and **Node-RED**, behind **Cloudflare**:
 
-1. **Cloudflare:** um registo DNS `toldo` com proxy ligado e SSL em modo "Full". Se a Cloudflare bloquear o ESP32 (erro 403), cria-se uma regra WAF para deixar passar o caminho `/esp`.
-2. **nginx:** um ficheiro em `/etc/nginx/sites-enabled/`, por exemplo:
+1. **Cloudflare:** a `toldo` DNS record with the proxy on and SSL in "Full" mode. If Cloudflare blocks the ESP32 (error 403), add a WAF rule that lets the `/esp` path through.
+2. **nginx:** a file in `/etc/nginx/sites-enabled/`, for example:
 
    ```nginx
    server {
        listen 443 ssl;
        server_name toldo.exemplo.com;
-       # ssl_certificate / ssl_certificate_key: os do servidor
+       # ssl_certificate / ssl_certificate_key: your server's
        auth_basic "Toldo";
        auth_basic_user_file /etc/nginx/.htpasswd_toldo;
        location / {
@@ -164,30 +166,30 @@ Servidor Linux com **nginx** e **Node-RED**, atrás da **Cloudflare**:
    }
    ```
 
-3. **Utilizadores** (sem `-c`, para não apagar os que já existem). Convém ter um só para o ESP32 e outro para ti:
+3. **Users** (without `-c`, so existing users aren't wiped). It's best to have one just for the ESP32 and another for you:
 
    ```bash
-   sudo htpasswd /etc/nginx/.htpasswd_toldo O_TEU_UTILIZADOR_ESP32
-   sudo htpasswd /etc/nginx/.htpasswd_toldo O_TEU_UTILIZADOR
-   sudo cut -d: -f1 /etc/nginx/.htpasswd_toldo   # lista os utilizadores (sem passwords)
+   sudo htpasswd /etc/nginx/.htpasswd_toldo YOUR_ESP32_USER
+   sudo htpasswd /etc/nginx/.htpasswd_toldo YOUR_USER
+   sudo cut -d: -f1 /etc/nginx/.htpasswd_toldo   # lists the users (no passwords)
    ```
 
-4. **Node-RED**, na porta 1880, sem abrir essa porta à internet. Importa `servidor/toldo_nodered_flow.json`. Fica um separador "Toldo" com:
+4. **Node-RED** on port 1880, without exposing that port to the internet. Import `servidor/toldo_nodered_flow.json`. You get a "Toldo" tab with:
 
-| Endpoint | O que faz |
+| Endpoint | What it does |
 |---|---|
-| `GET /toldo/` | página com o estado, o histórico de 6 h e os botões |
-| `POST /toldo/cmd` | botão: guarda o comando pendente (expira ao fim de 60 s) |
-| `POST /toldo/esp` | o ESP32 envia o estado e recebe `{"cmd":"…","cfg":{…}}` |
-| `GET /toldo/config` | página de configurações |
-| `POST /toldo/config` | guarda a alteração pendente (expira ao fim de 10 min) |
+| `GET /toldo/` | page with the state, the last 6 h of history and the buttons |
+| `POST /toldo/cmd` | button: stores the pending command (expires after 60 s) |
+| `POST /toldo/esp` | the ESP32 sends its state and receives `{"cmd":"…","cfg":{…}}` |
+| `GET /toldo/config` | settings page |
+| `POST /toldo/config` | stores the pending settings change (expires after 10 min) |
 
-### Atualizar o fluxo pela API do Node-RED (no SSH do servidor)
+### Updating the flow through the Node-RED API (over SSH on the server)
 
-Edita os `fn_*.js` e corre `python3 gerar_fluxo.py`, que gera o `toldo_nodered_flow.json`. Depois envia esse ficheiro para o servidor e corre:
+Edit the `fn_*.js` files and run `python3 gerar_fluxo.py`, which generates `toldo_nodered_flow.json`. Then copy that file to the server and run:
 
 ```bash
-read -p "Utilizador Node-RED: " NRU; read -s -p "Password Node-RED: " NRP; echo
+read -p "Node-RED user: " NRU; read -s -p "Node-RED password: " NRP; echo
 TOKEN=$(curl -s -X POST http://localhost:1880/auth/token --data-urlencode client_id=node-red-admin --data-urlencode grant_type=password --data-urlencode "scope=*" --data-urlencode "username=$NRU" --data-urlencode "password=$NRP" | python3 -c "import sys,json;print(json.load(sys.stdin)['access_token'])")
 FID=$(curl -s http://localhost:1880/flows -H "Authorization: Bearer $TOKEN" | python3 -c "import sys,json;print([x['id'] for x in json.load(sys.stdin) if x.get('type')=='tab' and x.get('label')=='Toldo'][0])")
 python3 -c "
@@ -199,66 +201,66 @@ json.dump({'id':sys.argv[1],'label':t['label'],'nodes':[x for x in n if x['type'
 curl -s -X PUT http://localhost:1880/flow/$FID -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" --data @toldo_api.json; echo
 ```
 
-A resposta certa é `{"id":"<id do separador>"}`. O comando substitui só o separador "Toldo" e não mexe nos outros fluxos. Na primeira instalação, importa o JSON pelo menu do editor do Node-RED (Import).
+The expected response is `{"id":"<tab id>"}`. The command replaces only the "Toldo" tab and leaves your other flows alone. For the first install, import the JSON from the Node-RED editor menu (Import).
 
 ---
 
-## 5. Carregar o código no ESP32
+## 5. Uploading the code to the ESP32
 
-1. Arduino IDE com o core **esp32 3.3.x**. Placa **ESP32C6 Dev Module**, com **USB CDC On Boot: Enabled**.
-2. Biblioteca **ArduinoJson 7**, pelo Gestor de Bibliotecas.
-3. Abre `esp32/toldo_meteo/toldo_meteo.ino`. A pasta tem de ter o mesmo nome do ficheiro.
-4. Cria o `segredos.h` a partir do `segredos.exemplo.h` (ver a secção 6) e carrega.
-5. Para testar só os optos, há o `esp32/comando_optoacoplador/comando_optoacoplador.ino`. No Monitor Série: `u`, `s`, `d`, e `p<ms>` para mudar a duração do toque.
+1. Arduino IDE with the **esp32 3.3.x** core. Board **ESP32C6 Dev Module**, with **USB CDC On Boot: Enabled**.
+2. **ArduinoJson 7** library, from the Library Manager.
+3. Open `esp32/toldo_meteo/toldo_meteo.ino`. The folder must have the same name as the file.
+4. Create `segredos.h` from `segredos.exemplo.h` (see section 6) and upload.
+5. To test just the optos, use `esp32/comando_optoacoplador/comando_optoacoplador.ino`. In the Serial Monitor: `u`, `s`, `d`, and `p<ms>` to change the press duration.
 
 ---
 
-## 6. O que tens de preencher (não vem no repositório)
+## 6. What you need to fill in (not in the repository)
 
-Copia `esp32/toldo_meteo/segredos.exemplo.h` para `esp32/toldo_meteo/segredos.h` e preenche. O `segredos.h` está no `.gitignore` e nunca é publicado.
+Copy `esp32/toldo_meteo/segredos.exemplo.h` to `esp32/toldo_meteo/segredos.h` and fill it in. `segredos.h` is in `.gitignore` and is never published. If it's missing, compilation stops with a message explaining what to do.
 
-| Onde | Campo |
+| Where | Field |
 |---|---|
-| `segredos.h` | `WIFI_SSID`, `WIFI_PASS` (rede de 2,4 GHz) |
-| `segredos.h` | `SERVIDOR_USER`, `SERVIDOR_PASS`: **têm de existir no `.htpasswd_toldo`** |
-| `segredos.h` | `SERVIDOR_URL`: o endereço do teu servidor |
-| servidor | utilizadores do `.htpasswd_toldo` e do editor do Node-RED |
+| `segredos.h` | `WIFI_SSID`, `WIFI_PASS` (2.4 GHz network) |
+| `segredos.h` | `SERVIDOR_USER`, `SERVIDOR_PASS`: **must exist in `.htpasswd_toldo`** |
+| `segredos.h` | `SERVIDOR_URL`: your server's address |
+| server | users in `.htpasswd_toldo` and in the Node-RED editor |
 
 ---
 
-## 7. Resolução de problemas
+## 7. Troubleshooting
 
-| Sintoma | Causa provável | Solução |
+| Symptom | Likely cause | Fix |
 |---|---|---|
-| Página pública: "ESP32 sem contacto desde…", mas `toldo.local` funciona | o utilizador ou a password do ESP32 não existem no `.htpasswd_toldo` (401) | criar o utilizador no servidor com a password que está no `segredos.h` (`sudo htpasswd …`, sem `-c`) |
-| Monitor Série: `Servidor: HTTP 401` | o mesmo | o mesmo |
-| `Servidor: HTTP 403` | a Cloudflare bloqueia o ESP32 | regra WAF para `/esp` |
-| `Servidor: HTTP 404` / `502` | nginx ou Node-RED | `curl -s -o /dev/null -w "%{http_code}\n" http://localhost:1880/toldo/` no servidor deve dar 200 |
-| Falhas a obter a previsão | o Open-Meteo está lento ou a recusar pedidos | já lê às xx:02 e tenta de 2 em 2 min; ver o motivo na página |
-| Um botão não reage | polaridade do transistor do opto | trocar o coletor e o emissor |
-| O toldo faz barulho de noite | — | ajustar o modo noite em `/config` |
+| Public page shows "ESP32 sem contacto desde…" (no contact since…), but `toldo.local` works | the ESP32's user or password isn't in `.htpasswd_toldo` (401) | create the user on the server with the password from `segredos.h` (`sudo htpasswd …`, without `-c`) |
+| Serial Monitor: `Servidor: HTTP 401` | same as above | same as above |
+| `Servidor: HTTP 403` | Cloudflare is blocking the ESP32 | WAF rule for `/esp` |
+| `Servidor: HTTP 404` / `502` | nginx or Node-RED | on the server, `curl -s -o /dev/null -w "%{http_code}\n" http://localhost:1880/toldo/` should return 200 |
+| Forecast fetch failures | Open-Meteo is slow or rejecting requests | it already fetches at xx:02 and retries every 2 min; check the reason on the page |
+| A button doesn't respond | opto transistor polarity | swap the collector and emitter |
+| The awning is noisy at night | — | adjust night mode in `/config` |
 
-Teste ao servidor a partir do PC (o curl pede a password):
+Testing the server from your PC (curl asks for the password):
 
 ```bash
-curl -u O_TEU_UTILIZADOR -X POST -H "Content-Type: application/json" -d '{"estado":"teste","hist":[]}' https://toldo.exemplo.com/esp
-# resposta certa: {"cmd":""}
+curl -u YOUR_USER -X POST -H "Content-Type: application/json" -d '{"estado":"teste","hist":[]}' https://toldo.exemplo.com/esp
+# expected response: {"cmd":""}
 ```
 
 ---
 
-## 8. Ficheiros
+## 8. Files
 
-| Ficheiro | O que é |
+| File | What it is |
 |---|---|
-| `esp32/toldo_meteo/toldo_meteo.ino` | código principal do ESP32 |
-| `esp32/toldo_meteo/segredos.exemplo.h` | modelo das credenciais (copiar para `segredos.h`) |
-| `esp32/comando_optoacoplador/comando_optoacoplador.ino` | sketch simples para testar os 3 optos |
-| `servidor/toldo_nodered_flow.json` | fluxo do Node-RED (separador "Toldo"), pronto a importar |
-| `servidor/fn_pagina.js` | página pública: estado, histórico e botões |
-| `servidor/fn_cmd.js` | guarda o botão carregado |
-| `servidor/fn_esp.js` | recebe o estado do ESP32 e devolve o comando e a configuração pendentes |
-| `servidor/fn_config_pagina.js` | página de configurações |
-| `servidor/fn_config_guardar.js` | guarda a alteração de configuração |
-| `servidor/gerar_fluxo.py` | junta os `fn_*.js` no `toldo_nodered_flow.json` |
-| `historico/dd27xx-gaviota-resumo.md` | fase RF com o CC1101 (abandonada: rolling code cifrado) |
+| `esp32/toldo_meteo/toldo_meteo.ino` | main ESP32 code |
+| `esp32/toldo_meteo/segredos.exemplo.h` | credentials template (copy to `segredos.h`) |
+| `esp32/comando_optoacoplador/comando_optoacoplador.ino` | simple sketch to test the 3 optos |
+| `servidor/toldo_nodered_flow.json` | Node-RED flow ("Toldo" tab), ready to import |
+| `servidor/fn_pagina.js` | public page: state, history and buttons |
+| `servidor/fn_cmd.js` | stores the button that was pressed |
+| `servidor/fn_esp.js` | receives the ESP32's state and returns the pending command and settings |
+| `servidor/fn_config_pagina.js` | settings page |
+| `servidor/fn_config_guardar.js` | stores the settings change |
+| `servidor/gerar_fluxo.py` | bundles the `fn_*.js` files into `toldo_nodered_flow.json` |
+| `historico/dd27xx-gaviota-resumo.md` | RF phase with the CC1101 (abandoned: encrypted rolling code) |
